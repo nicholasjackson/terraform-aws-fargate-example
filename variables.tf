@@ -54,3 +54,7 @@ variable "map_users" {
     },
   ]
 }
+
+variable "consul_server_nodes" {
+  default = 3
+}

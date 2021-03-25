@@ -1,5 +1,16 @@
 terraform {
-  required_version = ">= 0.12.6"
+  required_version = ">= 0.13.0"
+  required_providers {
+    kubernetes = {
+      source = "hashicorp/kubernetes"
+      version = "2.0.3"
+    }
+    
+    helm = {
+      source = "hashicorp/helm"
+      version = "2.0.3"
+    }
+  }
 }
 
 provider "aws" {
@@ -35,8 +46,14 @@ provider "kubernetes" {
   host                   = data.aws_eks_cluster.cluster.endpoint
   cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
   token                  = data.aws_eks_cluster_auth.cluster.token
-  load_config_file       = false
-  version                = "~> 1.11"
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = data.aws_eks_cluster.cluster.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
+    token                  = data.aws_eks_cluster_auth.cluster.token
+  }
 }
 
 data "aws_availability_zones" "available" {
@@ -75,40 +92,3 @@ module "vpc" {
   }
 }
 
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "13.2.1"
-  
-  cluster_name    = local.cluster_name
-  cluster_version = "1.18"
-  subnets         = module.vpc.private_subnets
-
-  tags = {
-    Environment = "test"
-    GithubRepo  = "terraform-aws-eks"
-    GithubOrg   = "terraform-aws-modules"
-  }
-
-  vpc_id = module.vpc.vpc_id
-
-  fargate_profiles = {
-    example = {
-      namespace = "default"
-
-      # Kubernetes labels for selection
-      # labels = {
-      #   Environment = "test"
-      #   GithubRepo  = "terraform-aws-eks"
-      #   GithubOrg   = "terraform-aws-modules"
-      # }
-
-      tags = {
-        Owner = "test"
-      }
-    }
-  }
-
-  map_roles    = var.map_roles
-  map_users    = var.map_users
-  map_accounts = var.map_accounts
-}
