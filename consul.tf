@@ -60,6 +60,7 @@ resource "helm_release" "consul" {
 
   repository = "https://helm.releases.hashicorp.com"
   chart      = "consul"
+  version = "v0.28.0"
 
   set {
     name = "global.name"
@@ -82,9 +83,33 @@ resource "helm_release" "consul" {
   }
   
   set {
+    name = "connectInject.enabled"
+    value = true
+  }
+  
+  set {
     name = "controller.enabled"
     value = true
   }
+  
+  set {
+    name = "global.acls.manageSystemACLs"
+    value = var.consul_acl_and_tls_enabled
+  }
+  
+  set {
+    name = "global.tls.enabled"
+    value = var.consul_acl_and_tls_enabled
+  }
+  
+  set {
+    name = "global.tls.enableAutoEncrypt"
+    value = var.consul_acl_and_tls_enabled
+  }
+}
+
+locals {
+  controller_patch = var.consul_acl_and_tls_enabled ? "./controller_tls_acl_patch.yaml" : "./controller_patch.yaml"
 }
 
 # Patch the consul controller for fargate
@@ -92,7 +117,7 @@ resource "null_resource" "patch_core_consul" {
   depends_on = [helm_release.consul]
 
   provisioner "local-exec" {
-    command = "kubectl patch deployment consul-controller --patch \"$(cat ./controller_patch.yaml)\""
+    command = "kubectl patch deployment consul-controller --patch \"$(cat ${local.controller_patch})\""
 
     environment =  {
       "KUBECONFIG" = "./${module.eks.kubeconfig_filename}"

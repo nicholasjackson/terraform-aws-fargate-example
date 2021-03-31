@@ -73,30 +73,38 @@ append the required items for Consul service mesh. Download the version for your
 
 https://github.com/nicholasjackson/consul-fargate-injection/releases
 
-Once installed you can use the binary to modify your deployments, let's modify the example deployment `api.yaml` in the `app` folder to see 
-how this works.  The file `api.yaml` is a standard Kubernetes deployment as show in the following output:
+Once installed you can use the binary to modify your deployments, let's modify the example deployment `api-v1.yaml` in the `app` folder to see 
+how this works.  The file `api-v1.yaml` is a standard Kubernetes deployment as show in the following output:
 
 ```yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-v1
+automountServiceAccountToken: false
+
 ---
 # API service version 1
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
+  name: api-v1
   labels:
-    app: api
+    app: api-v1
 spec:
   replicas: 3
-  # Ensure rolling deploys
   selector:
     matchLabels:
-      app: api
+      app: api-v1
   template:
     metadata:
       labels:
-        app: api
+        app: api-v1
         metrics: enabled
     spec:
+      serviceAccountName: api-v1
+      automountServiceAccountToken: true
       containers:
       - name: api
         image: nicholasjackson/fake-service:v0.20.0
@@ -106,16 +114,16 @@ spec:
         - name: "LISTEN_ADDR"
           value: "127.0.0.1:9090"
         - name: "NAME"
-          value: "api"
+          value: "api v1"
         - name: "MESSAGE"
-          value: "Response from API"
+          value: "Response from API version 1"
 
 ```
 
 This will create 3 instances of the API service, to inject the consul sidecars you run the following command.
 
 ```
-consul-inject -deployment ./app/api.yaml -service api -port 9090 > ./app/api-with-sidecars.yaml
+consul-inject -deployment ./app/api-v1.yaml -service api-v1 -port 9090 -tls-enabled -acl-enabled > ./app/api-v1-with-sidecars.yaml
 ```
 
 The consul-inject tool requires a number of parameters the first is `-deployment`, this is the name of the Kubernetes deployment that will be
@@ -125,31 +133,41 @@ Finally you pipe the output to a new file `> ./app/api-with-sidecars.yml`. The f
 example. You will see the additional sidecar containers and configuration that are required by Consul service mesh have automatically been added to the deployment.
 
 ```yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-v1
+automountServiceAccountToken: false
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app: api
-  name: api
+    app: api-v1
+  name: api-v1
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: api
+      app: api-v1
   template:
     metadata:
       labels:
-        app: api
+        app: api-v1
         metrics: enabled
     spec:
+      serviceAccountName: api-v1
+      automountServiceAccountToken: true
       containers:
       - env:
         - name: LISTEN_ADDR
           value: 127.0.0.1:9090
         - name: NAME
-          value: api
+          value: api v1
         - name: MESSAGE
-          value: Response from API
+          value: Response from API version 1
         image: nicholasjackson/fake-service:v0.20.0
         name: api
         ports:
@@ -157,7 +175,8 @@ spec:
       - command:
         - /bin/sh
         - -ec
-        - |
+        - |2
+
           exec /bin/consul agent \
             -node="${HOSTNAME}" \
             -advertise="${POD_IP}" \
@@ -165,6 +184,12 @@ spec:
             -client=0.0.0.0 \
             -hcl='leave_on_terminate = true' \
             -hcl='ports { grpc = 8502 }' \
+            -hcl='ca_file = "/consul/tls/tls.crt"' \
+            -hcl='auto_encrypt = {tls = true}' \
+            -hcl="auto_encrypt = {ip_san = [\"$POD_IP\"]}" \
+            -hcl='verify_outgoing = true' \
+            -hcl='ports { https = 8501 }' \
+            -hcl='ports { http = -1 }' \
             -config-dir=/consul/config \
             -datacenter=dc1 \
             -data-dir=/consul/data \
@@ -188,9 +213,11 @@ spec:
         - name: CONSUL_SVC_ADDRESS
           value: consul-server.default.svc:8301
         - name: SERVICE_NAME
-          value: 'api'
+          value: api
         - name: SERVICE_PORT
-          value: '9090'
+          value: "9090"
+        - name: CONSUL_HTTP_SSL_VERIFY
+          value: "false"
         image: hashicorp/consul:1.9.1
         imagePullPolicy: IfNotPresent
         name: consul-agent
@@ -219,7 +246,7 @@ spec:
             - /bin/sh
             - -ec
             - |
-              curl http://127.0.0.1:8500/v1/status/leader \
+              curl -k https://localhost:8501/v1/status/leader \
               2>/dev/null | grep -E '".+"'
           failureThreshold: 3
           periodSeconds: 10
@@ -239,29 +266,58 @@ spec:
           name: consul-agent-data
         - mountPath: /consul/config
           name: consul-connect-config-data
-        - mountPath: /consul/envoy
-          name: consul-connect-envoy-data
+        - mountPath: /consul/tls
+          name: consul-ca-cert
+          readOnly: true
       - command:
         - /bin/sh
         - -ec
-        - |
+        - |2
+
+          # Register the service
+          /consul/bin/consul services register \
+            -token-file="/consul/envoy/acl-token" \/consul/envoy/service.hcl
+
+          # Generate the envoy config
           /consul/bin/consul connect envoy \
-          -proxy-id="${SERVICE_NAME}-sidecar-proxy-${POD_NAME}" \
-          -bootstrap > /consul/envoy/envoy-bootstrap.yaml
+            -proxy-id="${PROXY_SERVICE_ID}" \
+            -token-file="/consul/envoy/acl-token" \-bootstrap > /consul/envoy/envoy-bootstrap.yaml
+
+          # Run the envoy sidecar
           envoy \
           --config-path \
           /consul/envoy/envoy-bootstrap.yaml
         env:
-        - name: CONSUL_HTTP_ADDR
-          value: http://localhost:8500
         - name: POD_NAME
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-        - name: SERVICE_NAME
-          value: 'api'
+        - name: PROXY_SERVICE_ID
+          value: $(POD_NAME)-api-sidecar-proxy
+        - name: CONSUL_HTTP_ADDR
+          value: https://localhost:8501
+        - name: CONSUL_GRPC_ADDR
+          value: localhost:8502
+        - name: CONSUL_HTTP_SSL_VERIFY
+          value: "false"
+        - name: CONSUL_CACERT
+          value: /consul/tls/tls.crt
         image: envoyproxy/envoy-alpine:v1.16.0
         imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -ec
+              - |-
+                /consul/bin/consul services deregister \
+                -token-file="/consul/envoy/acl-token" \
+                /consul/config/service.hcl
+
+
+                /consul/bin/consul logout \
+                  -token-file="/consul/envoy/acl-token"
         name: consul-connect-envoy-sidecar
         resources: {}
         terminationMessagePath: /dev/termination-log
@@ -271,6 +327,8 @@ spec:
           name: consul-connect-envoy-data
         - mountPath: /consul/bin
           name: consul-connect-bin-data
+        - mountPath: /consul/tls
+          name: consul-tls-data
       initContainers:
       - command:
         - /bin/sh
@@ -280,9 +338,9 @@ spec:
           # the consul agent will automatically read this config and register the service
           # and de-register it on exit.
 
-          cat <<EOF >/consul/config/service.hcl
+          cat <<EOF >/consul/envoy/service.hcl
           services {
-            id   = "${SERVICE_NAME}-${POD_NAME}"
+            id   = "${SERVICE_ID}"
             name = "${SERVICE_NAME}"
             address = "${POD_IP}"
             port = ${SERVICE_PORT}
@@ -291,8 +349,9 @@ spec:
               pod-name = "${POD_NAME}"
             }
           }
+
           services {
-            id   = "${SERVICE_NAME}-sidecar-proxy-${POD_NAME}"
+            id   = "${PROXY_SERVICE_ID}"
             name = "${SERVICE_NAME}-sidecar-proxy"
             kind = "connect-proxy"
             address = "${POD_IP}"
@@ -304,11 +363,11 @@ spec:
 
             proxy {
               destination_service_name = "${SERVICE_NAME}"
-              destination_service_id = "${SERVICE_NAME}-${POD_NAME}"
+              destination_service_id = "${SERVICE_ID}"
               local_service_address = "127.0.0.1"
               local_service_port = ${SERVICE_PORT}
 
-            }
+              }
 
             checks {
               name = "Proxy Public Listener"
@@ -319,9 +378,42 @@ spec:
 
             checks {
               name = "Destination Alias"
-              alias_service = "${SERVICE_NAME}-${POD_NAME}"
+              alias_service = "${SERVICE_ID}"
             }
 
+          }
+          EOF
+
+
+          cat <<EOF >/consul/config/config.json
+          {
+            "check_update_interval": "0s",
+            "enable_central_service_config": true
+          }
+          EOF
+
+          # Get the Consul CA Cert
+          curl ${CONSUL_HTTP_ADDR}/v1/connect/ca/roots?pem=true -k > /consul/tls/tls.crt
+
+          # Authenticate with Consul to obtain an ACL token
+          /bin/consul login -method="consul-k8s-auth-method" \
+            -bearer-token-file="/var/run/secrets/kubernetes.io/serviceaccount/token" \
+            -token-sink-file="/consul/envoy/acl-token" \
+            -meta="pod=${NAMESPACE}/${POD_NAME}"
+
+          chmod 444 /consul/envoy/acl-token
+
+          # Create the ACL config for the client
+          cat << EOF > /consul/config/client_acl_config.json
+          {
+            "acl": {
+              "enabled": true,
+              "default_policy": "deny",
+              "down_policy": "extend-cache",
+              "tokens": {
+                "agent": "${CLIENT_ACL_TOKEN}"
+              }
+            }
           }
           EOF
 
@@ -343,17 +435,36 @@ spec:
             fieldRef:
               fieldPath: metadata.name
         - name: SERVICE_NAME
-          value: 'api'
+          value: api
+        - name: SERVICE_ID
+          value: $(POD_NAME)-api
+        - name: PROXY_SERVICE_ID
+          value: $(POD_NAME)-api-sidecar-proxy
         - name: SERVICE_PORT
-          value: '9090'
+          value: "9090"
+        - name: CONSUL_HTTP_ADDR
+          value: https://consul-server.default.svc:8501
+        - name: CLIENT_ACL_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: token
+              name: consul-client-acl-token
+        - name: CONSUL_HTTP_SSL_VERIFY
+          value: "false"
+        - name: CONSUL_CACERT
+          value: /consul/tls/tls.crt
         image: hashicorp/consul:1.9.1
         imagePullPolicy: IfNotPresent
         name: consul-init
         volumeMounts:
+        - mountPath: /consul/envoy
+          name: consul-connect-envoy-data
         - mountPath: /consul/config
           name: consul-connect-config-data
         - mountPath: /consul/bin
           name: consul-connect-bin-data
+        - mountPath: /consul/tls
+          name: consul-tls-data
       volumes:
       - emptyDir: {}
         name: consul-connect-envoy-data
@@ -363,12 +474,20 @@ spec:
         name: consul-connect-bin-data
       - emptyDir: {}
         name: consul-agent-data
+      - emptyDir: {}
+        name: consul-tls-data
+      - name: consul-ca-cert
+        secret:
+          items:
+          - key: tls.crt
+            path: tls.crt
+          secretName: consul-ca-cert
 ```
 
 Let`s now deploy this application:
 
 ```shell
-kubectl -f ./app/api-with-sidecar.yaml
+kubectl -f ./app/api-v1-with-sidecar.yaml
 ```
 
 If you query the cluster you will see the pods starting.
@@ -376,9 +495,9 @@ If you query the cluster you will see the pods starting.
 ```shell
 ➜ k get pods
 NAME                   READY   STATUS    RESTARTS   AGE
-api-86bf9567b6-2ml8s   0/3     Pending   0          4s
-api-86bf9567b6-n5k7j   0/3     Pending   0          4s
-api-86bf9567b6-w6kxd   0/3     Pending   0          4s
+api-v1-86bf9567b6-2ml8s   0/3     Pending   0          4s
+api-v1-86bf9567b6-n5k7j   0/3     Pending   0          4s
+api-v1-86bf9567b6-w6kxd   0/3     Pending   0          4s
 consul-server-0        1/1     Running   0          7m25s
 consul-server-1        1/1     Running   0          7m23s
 consul-server-2        1/1     Running   0          7m21s
@@ -389,10 +508,17 @@ with the instances for each pod.
 
 ![](images/eks_consul_1.png)
 
+To demonstrate Consuls capability for L7 routing, lets also deploy a v2 of that same service.
+
+```
+consul-inject -deployment ./app/api-v1.yaml -service api-v1 -port 9090 -tls-enabled -acl-enabled > ./app/api-v2-with-sidecars.yaml
+kubectl -f ./app/api-v2-with-sidecar.yaml
+```
+
 Let's now deploy the `web` application that will connect to the API service, again you can run the `consul-injector` command.
 The command is very similar to last time you ran it, this time you set the service name to `web` and you are also adding `upstreams`. 
 The upstream flag configures consul to expose the service `api` on `localhost` at port `9091`. This is the same convention you 
-would use if you were configuring the service using the injector annotations. 
+would use if you were configuring the service using the injector annotations. Previously you deployed two services `api
 
 The example application you are deploying is a microservice that has been configured to call the upstream service `API` everytime 
 it receives a request. The call to `API` uses the service mesh upstream that you configured using the `upstreams` flag.
@@ -418,6 +544,40 @@ pods.
 
 ![](images/eks_consul_3.png)
 
+Finally lets create a Consul `ServiceRouter`, so you can route traffic between the different service
+versions `api-v1` and `api-v2` using different HTTP paths.
+
+```yaml
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceRouter
+metadata:
+  name: api
+spec:
+  routes:
+    - match:
+        http:
+          pathPrefix: /v1
+      destination:
+        service: api-v1
+    - match:
+        http:
+          pathPrefix: /v2
+      destination:
+        service: api-v2
+    - match:
+        http:
+          pathPrefix: /
+      destination:
+        service: api-v1
+```
+
+Apply this configuration with the following command:
+
+```shell
+kubectl apply -f ./app/config.yaml
+```
+
 Let's test the application, the `web` application does not have a public service created for it however you can use `kubectl port-forward`
 to expose a port locally. Run the following command in your terminal.
 
@@ -433,7 +593,7 @@ Forwarding from [::1]:9090 -> 9090
 You can then curl the endpoint of the service:
 
 ```shell
-curl http://localhost:9090
+curl http://localhost:9090/v1
 ```
 
 You should see a response similar to the below, if you look at the `upstream_calls` section
@@ -442,39 +602,49 @@ this curl a few times you will see the `ip_addresses` of the upstream change as 
 loadbalances your requests.
 
 ```json
+➜ curl localhost:9090/v1
 {
   "name": "web",
-  "uri": "/",
+  "uri": "/v1",
   "type": "HTTP",
   "ip_addresses": [
-    "172.16.2.170"
+    "172.16.2.28"
   ],
-  "start_time": "2021-03-24T17:06:47.857197",
-  "end_time": "2021-03-24T17:06:47.916345",
-  "duration": "59.148263ms",
+  "start_time": "2021-03-31T08:30:33.897020",
+  "end_time": "2021-03-31T08:30:33.904217",
+  "duration": "7.196101ms",
   "body": "Response from Web",
   "upstream_calls": {
     "http://localhost:9091": {
-      "name": "api",
+      "name": "api v1",
       "uri": "http://localhost:9091",
       "type": "HTTP",
       "ip_addresses": [
-        "172.16.2.232"
+        "172.16.2.6"
       ],
-      "start_time": "2021-03-24T17:06:47.915251",
-      "end_time": "2021-03-24T17:06:47.915473",
-      "duration": "221.564µs",
+      "start_time": "2021-03-31T08:30:33.903079",
+      "end_time": "2021-03-31T08:30:33.903172",
+      "duration": "91.073µs",
       "headers": {
-        "Content-Length": "260",
+        "Content-Length": "272",
         "Content-Type": "text/plain; charset=utf-8",
-        "Date": "Wed, 24 Mar 2021 17:06:47 GMT"
+        "Date": "Wed, 31 Mar 2021 08:30:33 GMT",
+        "Server": "envoy",
+        "X-Envoy-Upstream-Service-Time": "1"
       },
-      "body": "Response from API",
+      "body": "Response from API version 1",
       "code": 200
     }
   },
   "code": 200
 }
+```
+
+Try another call, this time using the `v2` path, if you look at the `upstream_calls` section from the
+output you will see that this time it shows the response from the V2 API.
+
+```shell
+curl http://localhost:9090/v2
 ```
 
 ## Destroying the demo

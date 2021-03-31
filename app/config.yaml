@@ -1,0 +1,54 @@
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceDefaults
+metadata:
+  name: web
+spec:
+  protocol: http
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceDefaults
+metadata:
+  name: api
+spec:
+  protocol: http
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceDefaults
+metadata:
+  name: api-v1
+spec:
+  protocol: http
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceDefaults
+metadata:
+  name: api-v2
+spec:
+  protocol: http
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceRouter
+metadata:
+  name: api
+spec:
+  routes:
+    - match:
+        http:
+          pathPrefix: /v1
+      destination:
+        service: api-v1
+    - match:
+        http:
+          pathPrefix: /v2
+      destination:
+        service: api-v2
+    - match:
+        http:
+          pathPrefix: /
+      destination:
+        service: api-v1

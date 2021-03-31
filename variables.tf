@@ -58,3 +58,7 @@ variable "map_users" {
 variable "consul_server_nodes" {
   default = 3
 }
+
+variable "consul_acl_and_tls_enabled" {
+  default = true
+}

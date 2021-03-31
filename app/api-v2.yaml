@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: web
+  name: api-v2
 automountServiceAccountToken: false
 
 ---
@@ -10,24 +10,24 @@ automountServiceAccountToken: false
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: web
+  name: api-v2
   labels:
-    app: web
+    app: api-v2
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: web
+      app: api-v2
   template:
     metadata:
       labels:
-        app: web
+        app: api-v2
         metrics: enabled
     spec:
-      serviceAccountName: web
+      serviceAccountName: api-v2
       automountServiceAccountToken: true
       containers:
-      - name: web
+      - name: api
         image: nicholasjackson/fake-service:v0.20.0
         ports:
         - containerPort: 9090
@@ -35,8 +35,6 @@ spec:
         - name: "LISTEN_ADDR"
           value: "127.0.0.1:9090"
         - name: "NAME"
-          value: "web"
+          value: "api 2"
         - name: "MESSAGE"
-          value: "Response from Web"
-        - name: "UPSTREAM_URIS"
-          value: "http://localhost:9091"
+          value: "Response from API Version 2"

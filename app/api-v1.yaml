@@ -1,23 +1,31 @@
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-v1
+automountServiceAccountToken: false
+
+---
 # API service version 1
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
+  name: api-v1
   labels:
-    app: api
+    app: api-v1
 spec:
   replicas: 3
-  # Ensure rolling deploys
   selector:
     matchLabels:
-      app: api
+      app: api-v1
   template:
     metadata:
       labels:
-        app: api
+        app: api-v1
         metrics: enabled
     spec:
+      serviceAccountName: api-v1
+      automountServiceAccountToken: true
       containers:
       - name: api
         image: nicholasjackson/fake-service:v0.20.0
@@ -27,6 +35,6 @@ spec:
         - name: "LISTEN_ADDR"
           value: "127.0.0.1:9090"
         - name: "NAME"
-          value: "api"
+          value: "api v1"
         - name: "MESSAGE"
-          value: "Response from API"
+          value: "Response from API version 1"
