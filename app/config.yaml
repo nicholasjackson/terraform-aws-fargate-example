@@ -52,3 +52,27 @@ spec:
           pathPrefix: /
       destination:
         service: api-v1
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-v1
+spec:
+  destination:
+    name: api-v1
+  sources:
+    - name: web
+      action: allow
+
+---
+apiVersion: consul.hashicorp.com/v1alpha1
+kind: ServiceIntentions
+metadata:
+  name: api-v2
+spec:
+  destination:
+    name: api-v2
+  sources:
+    - name: web
+      action: allow

@@ -55,12 +55,13 @@ resource "kubernetes_persistent_volume_claim" "consul_server" {
 }
 
 resource "helm_release" "consul" {
-  depends_on = [module.eks, kubernetes_persistent_volume_claim.consul_server]
+  depends_on = [module.eks, module.vpc, kubernetes_persistent_volume_claim.consul_server]
   name       = "consul"
 
   repository = "https://helm.releases.hashicorp.com"
   chart      = "consul"
-  version = "v0.28.0"
+  version    = "v0.28.0"
+  timeout    = 500
 
   set {
     name = "global.name"
