@@ -210,7 +210,7 @@ consul-webhook-cert-manager-667b4f5c8-jphcp                   1/1     Running   
 Once the pods are running let's take a look at the Consul UI, you will be able to see the service `api-v1` registered successfully along
 with the instances for each pod.
 
-![](images/eks_consul_1.png)
+![](images/eks_consul_2.png)
 
 To demonstrate Consuls capability for L7 routing, lets also deploy a v2 of that same service.
 
